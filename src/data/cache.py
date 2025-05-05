@@ -7,7 +7,7 @@ class Cache:
         self._line_items_cache: dict[str, list[dict[str, any]]] = {}
         self._insider_trades_cache: dict[str, list[dict[str, any]]] = {}
         self._company_news_cache: dict[str, list[dict[str, any]]] = {}
-
+        self._earnings_dates_cache: dict[str, list[dict[str, any]]] = {}
     def _merge_data(self, existing: list[dict] | None, new_data: list[dict], key_field: str) -> list[dict]:
         """Merge existing and new data, avoiding duplicates based on a key field."""
         if not existing:
@@ -33,7 +33,18 @@ class Cache:
             key_field="time"
         )
 
-    def get_financial_metrics(self, ticker: str) -> list[dict[str, any]]:
+    def get_earnings_dates(self, ticker: str) -> list[dict[str, any]]:
+        """Get cached earnings dates if available."""
+        return self._earnings_dates_cache.get(ticker)
+
+    def set_earnings_dates(self, ticker: str, data: list[dict[str, any]]):
+        """Append new earnings dates to cache."""
+        self._earnings_dates_cache[ticker] = self._merge_data(
+            self._earnings_dates_cache.get(ticker),
+            data,
+            key_field="report_period"
+        )
+    def get_financial_metrics(self, ticker: str) -> list[dict[str, any]] | None:
         """Get cached financial metrics if available."""
         return self._financial_metrics_cache.get(ticker)
 

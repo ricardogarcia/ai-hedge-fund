@@ -9,7 +9,7 @@ from agents.sentiment import sentiment_agent
 from agents.technicals import technical_analyst_agent
 from agents.valuation import valuation_agent
 from agents.warren_buffett import warren_buffett_agent
-
+from agents.ricardo_garcia import ricardo_garcia_agent
 # Define analyst configuration - single source of truth
 ANALYST_CONFIG = {
     "ben_graham": {
@@ -56,6 +56,11 @@ ANALYST_CONFIG = {
         "display_name": "Valuation Analyst",
         "agent_func": valuation_agent,
         "order": 7,
+    },
+    "ricardo_garcia": {
+        "display_name": "Ricardo Garcia",
+        "agent_func": ricardo_garcia_agent,
+        "order": 8,
     },
 }
 

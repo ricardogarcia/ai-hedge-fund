@@ -88,6 +88,32 @@ def get_financial_metrics(
     _cache.set_financial_metrics(ticker, [m.model_dump() for m in financial_metrics])
     return financial_metrics
 
+def get_next_earnings_date(ticker: str) -> str | None:
+    """Fetch earnings dates from cache or API."""
+    # Check cache first
+    if cached_data := _cache.get_earnings_dates(ticker):
+        return cached_data
+    # Construct the API URL
+    url = f'https://api.financialdatasets.ai/earnings/press-releases?ticker={ticker}'
+
+     # If not in cache or insufficient data, fetch from API
+    headers = {}
+    if api_key := os.environ.get("FINANCIAL_DATASETS_API_KEY"):
+        headers["X-API-KEY"] = api_key
+    # Make the API request
+    response = requests.get(url, headers=headers)
+
+    # Check if the request was successful
+    if response.status_code == 200:
+        press_releases = response.json().get('press_releases', [])
+        if press_releases:
+            # Assuming the press releases are sorted by date descending
+            next_earnings = press_releases[0]
+            _cache.set_earnings_dates(ticker, [next_earnings])
+            return next_earnings["date"]
+    else:
+        raise Exception(f"Error fetching data: {ticker} - {response.status_code} - {response.text}")
+    return None
 
 def search_line_items(
     ticker: str,
