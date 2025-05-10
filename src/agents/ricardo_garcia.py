@@ -29,33 +29,13 @@ class RicardoGarciaSignal(BaseModel):
     reasoning: str
 
 
-RICARDO_GARCIA_STRATEGY = """
-    Ricardo Garcia is a financial analyst who uses the following principles in most important to least important order:
-
-    1. He invests mostly when the overall S&P 500 is down 10% or more over the last month and when a particular stock has strong revenue and earnings growth.
-    2. He sells when the stock has had strong gains and is overbought on the RSI.  
-    3. He never buys stocks until a 2-4 weeks before earnings
-    4. The most important principle of his strategy is he usually sells a week or two after the stock has had strong gains or earnings reporrts.
-    5. The penultimate strategy is to invest in companies that are using disruptive technology to grow their business.
-    especially in the AI, robotics, and biotechnology sectors.  We should always take into account the potential for a strong upcoming earnings report and not invest in companies right after earnings.  Buy companies in the weeks running up to earnings, usually 2-4 weeks.  
-    6. Lastly, almost always invest in companies where the marjority shareowners have funded the policitians that are currently in power.  This would mean that those companies stand to beneft from the policies of the current administration.
-
-    An example of this is Jeff Bezos, who is the majority shareholder of Amazon.  He has funded many politicians who are in power and has a lot of influence over the policies of the United States.
-    Another example is Elon Musk, who is the majority shareholder of Tesla.  He has funded many politicians who are in power and has a lot of influence over the policies of the United States.
-    Another example is Mark Zuckerberg, who is the majority shareholder of Facebook.  He has funded many politicians who are in power and has a lot of influence over the policies of the United States.
-    Another example is Tim Cook, who is the majority shareholder of Apple.  He has funded many politicians who are in power and has a lot of influence over the policies of the United States.
-    Another example of this is Peter Thiel, who is the majority shareholder of Palantir.  He has funded many politicians who are in power and has a lot of influence over the policies of the United States.
-    Another example of this is Jack Ma, who is the majority shareholder of Alibaba.  He has funded many politicians who are in power and has a lot of influence over the policies of the United States.
-    """
-
 def ricardo_garcia_agent(state: AgentState):
    
     data = state["data"]
     start_date = data["start_date"]
     end_date = data["end_date"]
     tickers = data["tickers"]
-    data["ricardo_garcia_strategy"] = RICARDO_GARCIA_STRATEGY
-
+    
     # Initialize analysis for each ticker
     ricardo_garcia_analysis = {}
     for ticker in tickers:
@@ -75,36 +55,14 @@ def ricardo_garcia_agent(state: AgentState):
         # Convert prices to a DataFrame
         prices_df = prices_to_df(prices)
 
-        progress.update_status("ricardo_garcia_agent", ticker, "Calculating trend signals")
-        trend_signals = calculate_trend_signals(prices_df)
+        # Calculate the Hurst Exponent
 
-        progress.update_status("ricardo_garcia_agent", ticker, "Calculating mean reversion")
-        mean_reversion_signals = calculate_mean_reversion_signals(prices_df)
-
-        progress.update_status("ricardo_garcia_agent", ticker, "Calculating momentum")
-        momentum_signals = calculate_momentum_signals(prices_df)
-
-        progress.update_status("ricardo_garcia_agent", ticker, "Analyzing volatility")
-        volatility_signals = calculate_volatility_signals(prices_df)
-
-        progress.update_status("ricardo_garcia_agent", ticker, "Statistical analysis")
-        market_analysis_signals = calculate_market_analysis(prices_df)
-
-        # Combine all signals using a weighted ensemble approach
-        strategy_weights = {
-            "trend": 0.10,
-            "mean_reversion": 0.10,
-            "momentum": 0.10,
-            "volatility": 0.10,
-            "market_analysis": 0.60,
-        }
-
-        progress.update_status("ricardo_garcia_agent", ticker, "Fetching financial metrics")
-        # You can adjust these parameters (period="annual"/"ttm", limit=5/10, etc.)
-        metrics = get_financial_metrics(ticker, end_date, period="annual", limit=5)
+        progress.update_status("ricardo_garcia_agent", ticker, "Getting market cap")
+        market_cap = get_market_cap(ticker, end_date)
 
         progress.update_status("ricardo_garcia_agent", ticker, "Gathering financial line items")
         # Request multiple periods of data (annual or TTM) for a more robust view.
+       
         financial_line_items = search_line_items(
             ticker,
             [
@@ -126,6 +84,42 @@ def ricardo_garcia_agent(state: AgentState):
             limit=5
         )
 
+        progress.update_status("ricardo_garcia_agent", ticker, "Fetching financial metrics")
+        # You can adjust these parameters (period="annual"/"ttm", limit=5/10, etc.)
+        metrics = get_financial_metrics(ticker, end_date, period="annual", limit=5)
+
+        # Transform to dictionary
+        metrics_dict = {
+            item.report_period: {
+                k: v for k, v in item.model_dump().items() 
+                if k not in ['ticker', 'report_period', 'period', 'currency']
+            }
+            for item in metrics
+        }
+
+        progress.update_status("ricardo_garcia_agent", ticker, "Calculating trend signals")
+        trend_signals = calculate_trend_signals(prices_df)
+
+        progress.update_status("ricardo_garcia_agent", ticker, "Calculating mean reversion")
+        mean_reversion_signals = calculate_mean_reversion_signals(prices_df)
+
+        progress.update_status("ricardo_garcia_agent", ticker, "Analyzing disruptive potential")
+        disruptive_analysis = analyze_disruptive_potential(metrics, financial_line_items)
+
+        progress.update_status("ricardo_garcia_agent", ticker, "Analyzing valuation")
+        valuation_analysis = analyze_valuation(financial_line_items, market_cap)
+
+        # Combine all signals using a weighted ensemble approach
+        strategy_weights = {
+            "trend": 0.10,
+            "mean_reversion": 0.20,
+            "disruptive_analysis": 0.30,
+            "valuation_analysis": 0.30,
+        }
+        
+        total_score = valuation_analysis["score"] + disruptive_analysis["score"]
+        max_possible_score = 20  # Adjust weighting as desired
+
         # Transform to dictionary
         line_items_dict = {
             item.report_period: {
@@ -140,9 +134,8 @@ def ricardo_garcia_agent(state: AgentState):
             {
                 "trend": trend_signals,
                 "mean_reversion": mean_reversion_signals,
-                "momentum": momentum_signals,
-                "volatility": volatility_signals,
-                "market_analysis": market_analysis_signals,
+                "disruptive_analysis": disruptive_analysis,
+                "valuation_analysis": valuation_analysis,
             },
             strategy_weights,
         )
@@ -150,6 +143,8 @@ def ricardo_garcia_agent(state: AgentState):
         # Generate detailed analysis report for this ticker
         ricardo_garcia_analysis[ticker] = {
             "signal": combined_signal["signal"],
+            "score": total_score,
+            "max_score": max_possible_score,
             "confidence": round(combined_signal["confidence"] * 100),
             "strategy_signals": {
                 "trend_following": {
@@ -162,30 +157,26 @@ def ricardo_garcia_agent(state: AgentState):
                     "confidence": round(mean_reversion_signals["confidence"] * 100),
                     "metrics": normalize_pandas(mean_reversion_signals["metrics"]),
                 },
-                "momentum": {
-                    "signal": momentum_signals["signal"],
-                    "confidence": round(momentum_signals["confidence"] * 100),
-                    "metrics": normalize_pandas(momentum_signals["metrics"]),
+                "disruptive_analysis": {
+                    "score": disruptive_analysis["score"],
+                    "details": disruptive_analysis["details"],
                 },
-                "volatility": {
-                    "signal": volatility_signals["signal"],
-                    "confidence": round(volatility_signals["confidence"] * 100),
-                    "metrics": normalize_pandas(volatility_signals["metrics"]),
-                },
-                "market_analysis": {
-                    "signal": market_analysis_signals["signal"],
-                    "confidence": round(market_analysis_signals["confidence"] * 100),
-                    "metrics": normalize_pandas(market_analysis_signals["metrics"]),
+                "valuation_analysis": {
+                    "score": valuation_analysis["score"],
+                    "details": valuation_analysis["details"],
                 },
             },
         }
 
+        #merge the metrics and line items into a single dictionary
+        financial_data = {**metrics_dict, **line_items_dict}
+    
 
         # Generate a Ricardo Garcia-style investment signal
         ricardo_garcia_signal = generate_ricardo_garcia_output(
             ticker=ticker,
             analysis_data=ricardo_garcia_analysis[ticker],
-            financial_data=line_items_dict,
+            financial_data=financial_data,
             model_name=state["metadata"]["model_name"],
             model_provider=state["metadata"]["model_provider"],
         )
@@ -387,34 +378,6 @@ def calculate_volatility_signals(prices_df):
         },
     }
 
-
-def calculate_market_analysis(prices_df):
-    """
-    Market analysis signals based on price action and market timing analysis
-    """
-    # Calculate price distribution statistics
-    returns = prices_df["close"].pct_change()
-
-    # Generate signal based on statistical properties
-    if returns.iloc[-1] > -0.1:
-        signal = "bullish"
-        confidence = .8
-    elif returns.iloc[-1] > 0.1:
-        signal = "bearish"
-        confidence = .8
-    else:
-        signal = "neutral"
-        confidence = 0.5
-
-    return {
-        "signal": signal,
-        "confidence": confidence,
-        "metrics": {
-            "return": float(returns.iloc[-1]),
-        },
-    }
-
-
 def weighted_signal_combination(signals, weights):
     """
     Combines multiple trading signals using a weighted approach
@@ -576,8 +539,188 @@ def calculate_hurst_exponent(price_series: pd.Series, max_lag: int = 20) -> floa
         # Return 0.5 (random walk) if calculation fails
         return 0.5
     
- 
- 
+def analyze_valuation(financial_line_items: list, market_cap: float) -> dict:
+    """
+    Cathie Wood often focuses on long-term exponential growth potential. We can do
+    a simplified approach looking for a large total addressable market (TAM) and the
+    company's ability to capture a sizable portion.
+    """
+    if not financial_line_items or market_cap is None:
+        return {
+            "signal":"neutral",
+            "score": 0,
+            "details": "Insufficient data for valuation",
+            "confidence": 0
+        }
+
+    latest = financial_line_items[-1]
+    fcf = latest.free_cash_flow if latest.free_cash_flow else 0
+
+    if fcf <= 0:
+        return {
+            "signal":"bearish",
+            "score": 0,
+            "details": f"No positive FCF for valuation; FCF = {fcf}",
+            "intrinsic_value": None,
+            "confidence": 0
+        }
+
+    # Instead of a standard DCF, let's assume a higher growth rate for an innovative company.
+    # Example values:
+    growth_rate = 0.20  # 20% annual growth
+    discount_rate = 0.15
+    terminal_multiple = 25
+    projection_years = 5
+
+    present_value = 0
+    for year in range(1, projection_years + 1):
+        future_fcf = fcf * (1 + growth_rate) ** year
+        pv = future_fcf / ((1 + discount_rate) ** year)
+        present_value += pv
+
+    # Terminal Value
+    terminal_value = (fcf * (1 + growth_rate) ** projection_years * terminal_multiple) \
+                     / ((1 + discount_rate) ** projection_years)
+    intrinsic_value = present_value + terminal_value
+
+    margin_of_safety = (intrinsic_value - market_cap) / market_cap
+
+    score = 0
+    if margin_of_safety > 0.5:
+        score += 5  
+    elif margin_of_safety > 0.2:
+        score += 3
+    elif margin_of_safety > 0:
+        score += 1
+
+    details = [
+        f"Calculated intrinsic value: ~{intrinsic_value:,.2f}",
+        f"Market cap: ~{market_cap:,.2f}",
+        f"Margin of safety: {margin_of_safety:.2%}"
+    ]
+
+    max_possible_score = 5
+    signal = "bullish" if score >= 0.7 * max_possible_score else "bearish" if score <= 0.3 * max_possible_score else "neutral"
+    return {
+        "signal": signal,
+        "score": score,
+        "details": "; ".join(details),
+        "intrinsic_value": intrinsic_value,
+        "confidence": score / max_possible_score,
+        "margin_of_safety": margin_of_safety
+    } 
+
+def analyze_disruptive_potential(metrics: list, financial_line_items: list) -> dict:
+    """
+    Analyze whether the company has disruptive products, technology, or business model.
+    Evaluates multiple dimensions of disruptive potential:
+    1. Revenue Growth Acceleration - indicates market adoption
+    2. R&D Intensity - shows innovation investment
+    3. Gross Margin Trends - suggests pricing power and scalability
+    4. Operating Leverage - demonstrates business model efficiency
+    5. Market Share Dynamics - indicates competitive position
+    """
+    score = 0
+    details = []
+
+    if not metrics or not financial_line_items:
+        return {
+            "score": 0,
+            "details": "Insufficient data to analyze disruptive potential"
+        }
+
+    # 1. Revenue Growth Analysis - Check for accelerating growth
+    revenues = [item.revenue for item in financial_line_items if item.revenue]
+    if len(revenues) >= 3:  # Need at least 3 periods to check acceleration
+        growth_rates = []
+        for i in range(len(revenues)-1):
+            if revenues[i] and revenues[i+1]:
+                growth_rate = (revenues[i+1] - revenues[i]) / abs(revenues[i]) if revenues[i] != 0 else 0
+                growth_rates.append(growth_rate)
+
+        # Check if growth is accelerating
+        if len(growth_rates) >= 2 and growth_rates[-1] > growth_rates[0]:
+            score += 2
+            details.append(f"Revenue growth is accelerating: {(growth_rates[-1]*100):.1f}% vs {(growth_rates[0]*100):.1f}%")
+
+        # Check absolute growth rate
+        latest_growth = growth_rates[-1] if growth_rates else 0
+        if latest_growth > 1.0:
+            score += 3
+            details.append(f"Exceptional revenue growth: {(latest_growth*100):.1f}%")
+        elif latest_growth > 0.5:
+            score += 2
+            details.append(f"Strong revenue growth: {(latest_growth*100):.1f}%")
+        elif latest_growth > 0.2:
+            score += 1
+            details.append(f"Moderate revenue growth: {(latest_growth*100):.1f}%")
+    else:
+        details.append("Insufficient revenue data for growth analysis")
+
+    # 2. Gross Margin Analysis - Check for expanding margins
+    gross_margins = [item.gross_margin for item in financial_line_items if hasattr(item, 'gross_margin') and item.gross_margin is not None]
+    if len(gross_margins) >= 2:
+        margin_trend = gross_margins[-1] - gross_margins[0]
+        if margin_trend > 0.05:  # 5% improvement
+            score += 2
+            details.append(f"Expanding gross margins: +{(margin_trend*100):.1f}%")
+        elif margin_trend > 0:
+            score += 1
+            details.append(f"Slightly improving gross margins: +{(margin_trend*100):.1f}%")
+
+        # Check absolute margin level
+        if gross_margins[-1] > 0.50:  # High margin business
+            score += 2
+            details.append(f"High gross margin: {(gross_margins[-1]*100):.1f}%")
+    else:
+        details.append("Insufficient gross margin data")
+
+    # 3. Operating Leverage Analysis
+    revenues = [item.revenue for item in financial_line_items if item.revenue]
+    operating_expenses = [
+        item.operating_expense
+        for item in financial_line_items
+        if hasattr(item, "operating_expense") and item.operating_expense
+    ]
+
+    if len(revenues) >= 2 and len(operating_expenses) >= 2:
+        rev_growth = (revenues[-1] - revenues[0]) / abs(revenues[0])
+        opex_growth = (operating_expenses[-1] - operating_expenses[0]) / abs(operating_expenses[0])
+
+        if rev_growth > opex_growth:
+            score += 2
+            details.append("Positive operating leverage: Revenue growing faster than expenses")
+    else:
+        details.append("Insufficient data for operating leverage analysis")
+
+    # 4. R&D Investment Analysis
+    rd_expenses = [item.research_and_development for item in financial_line_items if hasattr(item, 'research_and_development') and item.research_and_development is not None]
+    if rd_expenses and revenues:
+        rd_intensity = rd_expenses[-1] / revenues[-1]
+        if rd_intensity > 0.15:  # High R&D intensity
+            score += 3
+            details.append(f"High R&D investment: {(rd_intensity*100):.1f}% of revenue")
+        elif rd_intensity > 0.08:
+            score += 2
+            details.append(f"Moderate R&D investment: {(rd_intensity*100):.1f}% of revenue")
+        elif rd_intensity > 0.05:
+            score += 1
+            details.append(f"Some R&D investment: {(rd_intensity*100):.1f}% of revenue")
+    else:
+        details.append("No R&D data available")
+
+    max_possible_score = 12  # Sum of all possible points
+
+    signal = "bullish" if score >= 0.7 * max_possible_score else "bearish" if score <= 0.3 * max_possible_score else "neutral"
+    return {
+        "signal": signal,
+        "score": score,
+        "details": "; ".join(details),
+        "confidence": score / max_possible_score,
+        "raw_score": score,
+        "max_score": max_possible_score
+    }
+
 def generate_ricardo_garcia_output(
     ticker: str,
     analysis_data: dict[str, any],
@@ -597,24 +740,14 @@ def generate_ricardo_garcia_output(
         (
             "system",
             """You are a Ricardo Garcia AI agent, making investment decisions using his principles:\n\n"
-            " 1. He invests mostly when the overall S&P 500 is down 10% or more over the last month and when a particular stock has strong revenue and earnings growth.\n"
-            " 2. He buys stocks when its 4 weeks or less days before earnings and earnings are projected to be very strong.\n"
-            " 3. He sells when the stock has had strong gains and more than 2 weeks but less than 4weeks since the last earnings report.  \n"
-            " 4. He invests in companies that are using disruptive technology to grow their business. especially in the AI, robotics, and biotechnology sectors.  We should always take into account the potential for a strong upcoming earnings report and not invest in companies right after earnings.  Buy companies in the weeks running up to earnings, usually 2-4 weeks.  \n"
-            " 5. Almost always invest in companies where the marjority shareowners have funded the policitians that are currently in power.  This would mean that those companies stand to beneft from the policies of the current administration.  \n"
-            " An example of this is Jeff Bezos, who is the majority shareholder of Amazon.  He has funded many politicians who are in power and has a lot of influence over the policies of the United States. \n"
-            " Another example is Elon Musk, who is the majority shareholder of Tesla.  He has funded many politicians who are in power and has a lot of influence over the policies of the United States. \n"
-            " Another example is Mark Zuckerberg, who is the majority shareholder of Facebook.  He has funded many politicians who are in power and has a lot of influence over the policies of the United States. \n"
-            " Another example is Tim Cook, who is the majority shareholder of Apple.  He has funded many politicians who are in power and has a lot of influence over the policies of the United States. \n"
-            " Another example of this is Peter Thiel, who is the majority shareholder of Palantir.  He has funded many politicians who are in power and has a lot of influence over the policies of the United States. \n"
-            " Another example of this is Jack Ma, who is the majority shareholder of Alibaba.  He has funded many politicians who are in power and has a lot of influence over the policies of the United States. \n"
-            
-            "7. Seek companies leveraging disruptive innovation.\n"
-            "8. Emphasize exponential growth potential, large TAM.\n"
-            "9. Focus on technology, healthcare, or other future-facing sectors.\n"
-            "10. Consider multi-year time horizons for potential breakthroughs.\n"
-            "11. Accept higher volatility in pursuit of high returns.\n"
-            "12. Evaluate management's vision and ability to invest in R&D.\n\n"
+            " 1. He invests mostly when a particular stock has strong revenue and earnings growth.\n"
+            " 2. He invests in growth companies that are using AI technology to grow their business. especially in the military, robotics, and biotechnology sectors.  We should always take into account the potential for a strong upcoming earnings report and not invest in companies right after earnings.  Buy companies in the weeks running up to earnings, usually 2-4 weeks.  \n"
+            " 3. Almost always invest in companies where the majority shareowners have funded the policitians that are currently in power.  This would mean that those companies stand to beneft from the policies of the current administration.  \n"
+            " 4. Emphasize exponential growth potential, large TAM.\n"
+            " 5. Focus on technology, healthcare, or other future-facing sectors.\n"
+            " 6. He invests in growth stocks that have a market cap of less than 1 trillion dollars.\n"
+            " 7. He takes into account the macroeconomic factors for the sector that the company is in. If the sector is doing well, he will invest in the company. If it is not, he will not invest in the company.\n"
+            " 8. He looks at the RSI to determine if the stock is overbought or oversold. If it is overbought, he will not invest in the company. If it is oversold, he will invest in the company.\n"
             "Rules:\n"
             "- Identify disruptive or breakthrough technology.\n"
             "- Evaluate strong potential for multi-year revenue growth.\n"
@@ -625,8 +758,6 @@ def generate_ricardo_garcia_output(
         (
             "human",
             """Based on the following analysis, create a Ricardo Garcia-style investment signal. Make sure to look up the last and next earnings date against the current date, {today}, in order to better facilitate a signal.\n\n"
-            "Last Earnings Date: When was the last earnings date for {ticker}?\n\n"
-            "Next Earnings Date: What is the next earnings date for {ticker}?\n\n"
             "Financial Data for {ticker}:\n"
             "{financial_data}\n\n"
             "Analysis Data for {ticker}:\n"
