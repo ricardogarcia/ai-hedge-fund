@@ -741,7 +741,7 @@ def generate_ricardo_garcia_output(
             "system",
             """You are a Ricardo Garcia AI agent, making investment decisions using his principles:\n\n"
             " 1. He invests mostly when a particular stock has strong revenue and earnings growth.\n"
-            " 2. He invests in growth companies that are using AI technology to grow their business. especially in the military, robotics, and biotechnology sectors.  We should always take into account the potential for a strong upcoming earnings report and not invest in companies right after earnings.  Buy companies in the weeks running up to earnings, usually 2-4 weeks.  \n"
+            " 2. He invests in growth companies that are using AI technology to grow their business. especially in the military, robotics, and biotechnology sectors. \n"
             " 3. Almost always invest in companies where the majority shareowners have funded the policitians that are currently in power.  This would mean that those companies stand to beneft from the policies of the current administration.  \n"
             " 4. Emphasize exponential growth potential, large TAM.\n"
             " 5. Focus on technology, healthcare, or other future-facing sectors.\n"
@@ -766,6 +766,7 @@ def generate_ricardo_garcia_output(
             "{{\n  \"signal\": \"bullish/bearish/neutral\",\n  \"confidence\": float (0-100),\n  \"reasoning\": \"string\"\n}}"""
         )
     ])
+
 
     prompt = template.invoke({
         "analysis_data": json.dumps(analysis_data, indent=2),
