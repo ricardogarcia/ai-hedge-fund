@@ -146,12 +146,12 @@ def ricardo_garcia_agent(state: AgentState):
                 "disruptive_analysis": {
                     "signal": disruptive_analysis["signal"],
                     "score": disruptive_analysis["score"],
-                    "details": disruptive_analysis["details"],
+                    "metrics": normalize_pandas(disruptive_analysis["metrics"]),
                 },
                 "valuation_analysis": {
                     "signal": valuation_analysis["signal"],
                     "score": valuation_analysis["score"],
-                    "details": valuation_analysis["details"],
+                    "metrics": normalize_pandas(valuation_analysis["metrics"]),
                 },
             },
         }
@@ -534,7 +534,8 @@ def analyze_valuation(financial_line_items: list, market_cap: float) -> dict:
             "signal":"neutral",
             "score": 0,
             "details": "Insufficient data for valuation",
-            "confidence": 0
+            "confidence": 0,
+            "metrics": {}
         }
 
     latest = financial_line_items[-1]
@@ -546,7 +547,8 @@ def analyze_valuation(financial_line_items: list, market_cap: float) -> dict:
             "score": 0,
             "details": f"No positive FCF for valuation; FCF = {fcf}",
             "intrinsic_value": None,
-            "confidence": 0
+            "confidence": 0,
+            "metrics": {}
         }
 
     # Instead of a standard DCF, let's assume a higher growth rate for an innovative company.
@@ -588,12 +590,12 @@ def analyze_valuation(financial_line_items: list, market_cap: float) -> dict:
     return {
         "signal": signal,
         "score": score,
+        "details": "; ".join(details),
         "confidence": score / max_possible_score,
         "metrics": {
             "intrinsic_value": intrinsic_value,
             "margin_of_safety": margin_of_safety,
             "market_cap": market_cap,
-            "free_cash_flow": fcf
         }
     } 
 
