@@ -116,18 +116,6 @@ def ricardo_garcia_agent(state: AgentState):
             "disruptive_analysis": 0.30,
             "valuation_analysis": 0.30,
         }
-        
-        total_score = valuation_analysis["score"] + disruptive_analysis["score"]
-        max_possible_score = 20  # Adjust weighting as desired
-
-        # Transform to dictionary
-        line_items_dict = {
-            item.report_period: {
-                k: v for k, v in item.model_dump().items() 
-                if k not in ['ticker', 'report_period', 'period', 'currency']
-            }
-            for item in financial_line_items
-        }
 
         progress.update_status("ricardo_garcia_agent", ticker, "Combining signals")
         combined_signal = weighted_signal_combination(
@@ -143,8 +131,6 @@ def ricardo_garcia_agent(state: AgentState):
         # Generate detailed analysis report for this ticker
         ricardo_garcia_analysis[ticker] = {
             "signal": combined_signal["signal"],
-            "score": total_score,
-            "max_score": max_possible_score,
             "confidence": round(combined_signal["confidence"] * 100),
             "strategy_signals": {
                 "trend_following": {
@@ -158,25 +144,23 @@ def ricardo_garcia_agent(state: AgentState):
                     "metrics": normalize_pandas(mean_reversion_signals["metrics"]),
                 },
                 "disruptive_analysis": {
+                    "signal": disruptive_analysis["signal"],
                     "score": disruptive_analysis["score"],
                     "details": disruptive_analysis["details"],
                 },
                 "valuation_analysis": {
+                    "signal": valuation_analysis["signal"],
                     "score": valuation_analysis["score"],
                     "details": valuation_analysis["details"],
                 },
             },
         }
-
-        #merge the metrics and line items into a single dictionary
-        financial_data = {**metrics_dict, **line_items_dict}
     
 
         # Generate a Ricardo Garcia-style investment signal
         ricardo_garcia_signal = generate_ricardo_garcia_output(
             ticker=ticker,
             analysis_data=ricardo_garcia_analysis[ticker],
-            financial_data=financial_data,
             model_name=state["metadata"]["model_name"],
             model_provider=state["metadata"]["model_provider"],
         )
@@ -604,10 +588,13 @@ def analyze_valuation(financial_line_items: list, market_cap: float) -> dict:
     return {
         "signal": signal,
         "score": score,
-        "details": "; ".join(details),
-        "intrinsic_value": intrinsic_value,
         "confidence": score / max_possible_score,
-        "margin_of_safety": margin_of_safety
+        "metrics": {
+            "intrinsic_value": intrinsic_value,
+            "margin_of_safety": margin_of_safety,
+            "market_cap": market_cap,
+            "free_cash_flow": fcf
+        }
     } 
 
 def analyze_disruptive_potential(metrics: list, financial_line_items: list) -> dict:
@@ -659,6 +646,7 @@ def analyze_disruptive_potential(metrics: list, financial_line_items: list) -> d
 
     # 2. Gross Margin Analysis - Check for expanding margins
     gross_margins = [item.gross_margin for item in financial_line_items if hasattr(item, 'gross_margin') and item.gross_margin is not None]
+    margin_trend = 0
     if len(gross_margins) >= 2:
         margin_trend = gross_margins[-1] - gross_margins[0]
         if margin_trend > 0.05:  # 5% improvement
@@ -695,6 +683,7 @@ def analyze_disruptive_potential(metrics: list, financial_line_items: list) -> d
 
     # 4. R&D Investment Analysis
     rd_expenses = [item.research_and_development for item in financial_line_items if hasattr(item, 'research_and_development') and item.research_and_development is not None]
+    rd_intensity = 0
     if rd_expenses and revenues:
         rd_intensity = rd_expenses[-1] / revenues[-1]
         if rd_intensity > 0.15:  # High R&D intensity
@@ -711,28 +700,34 @@ def analyze_disruptive_potential(metrics: list, financial_line_items: list) -> d
 
     max_possible_score = 12  # Sum of all possible points
 
-    signal = "bullish" if score >= 0.7 * max_possible_score else "bearish" if score <= 0.3 * max_possible_score else "neutral"
+    signal = "bullish" if score >= 0.65 * max_possible_score else "bearish" if score <= 0.4 * max_possible_score else "neutral"
     return {
         "signal": signal,
         "score": score,
         "details": "; ".join(details),
         "confidence": score / max_possible_score,
         "raw_score": score,
-        "max_score": max_possible_score
+        "max_score": max_possible_score,
+        "metrics": {
+            "revenue_growth": latest_growth,
+            "gross_margin": gross_margins[-1],
+            "operating_expense_growth": opex_growth,
+            "rd_investment": rd_intensity,
+            "revenue": revenues[-1],
+            "operating_expense": operating_expenses[-1],
+            "research_and_development": rd_expenses[-1],
+            "rd_intensity": rd_intensity,
+            "margin_trend": margin_trend
+        }
     }
 
 def generate_ricardo_garcia_output(
     ticker: str,
     analysis_data: dict[str, any],
-    financial_data: dict[str, any],
     model_name: str,
     model_provider: str,
 ) -> RicardoGarciaSignal:
-    
-    # get todays date as a string
-    today = datetime.now().strftime("%Y-%m-%d")
 
-    
     """
     Generates investment decisions in the style of Ricardo Garcia.
     """
@@ -757,9 +752,7 @@ def generate_ricardo_garcia_output(
         ),
         (
             "human",
-            """Based on the following analysis, create a Ricardo Garcia-style investment signal. Make sure to look up the last and next earnings date against the current date, {today}, in order to better facilitate a signal.\n\n"
-            "Financial Data for {ticker}:\n"
-            "{financial_data}\n\n"
+            """Based on the following analysis, create a Ricardo Garcia-style investment signal.\n\n"
             "Analysis Data for {ticker}:\n"
             "{analysis_data}\n\n"
             "Return the trading signal in this JSON format:\n"
@@ -771,8 +764,6 @@ def generate_ricardo_garcia_output(
     prompt = template.invoke({
         "analysis_data": json.dumps(analysis_data, indent=2),
         "ticker": ticker,
-        "today": today,
-        "financial_data": json.dumps(financial_data, indent=2),
     })
 
     def create_default_ricardo_garcia_signal():
