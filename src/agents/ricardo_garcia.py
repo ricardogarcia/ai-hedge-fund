@@ -29,12 +29,23 @@ class RicardoGarciaSignal(BaseModel):
     reasoning: str
 
 
-def ricardo_garcia_agent(state: AgentState):
-   
-    data = state["data"]
-    start_date = data["start_date"]
-    end_date = data["end_date"]
-    tickers = data["tickers"]
+def prepare_ml_data(analysis: dict,llm_signal: str) -> dict:
+    """
+    Prepare data for machine learning model training.
+    """
+    ml_data = {}
+    for ticker, analysis_data in analysis.items():
+        print(analysis_data)
+        strategy_signals = analysis_data["strategy_signals"]
+        for signal_name, signal_data in strategy_signals.items():
+            metrics = signal_data["metrics"]
+            for metric_name, metric_value in metrics.items():
+                ml_data[f"{signal_name}_{metric_name}"] = metric_value
+        ml_data[f"llm_signal"] = llm_signal
+    return ml_data
+
+
+def generate_ricardo_garcia_signals(tickers: list[str], start_date: str, end_date: str,model_name: str, model_provider: str) -> dict:
     
     # Initialize analysis for each ticker
     ricardo_garcia_analysis = {}
@@ -147,31 +158,46 @@ def ricardo_garcia_agent(state: AgentState):
                     "signal": disruptive_analysis["signal"],
                     "score": disruptive_analysis["score"],
                     "metrics": normalize_pandas(disruptive_analysis["metrics"]),
+                    "details": disruptive_analysis["details"],
+                    "max_score": disruptive_analysis["max_score"],
                 },
                 "valuation_analysis": {
                     "signal": valuation_analysis["signal"],
                     "score": valuation_analysis["score"],
+                    "max_score": valuation_analysis["max_score"],
                     "metrics": normalize_pandas(valuation_analysis["metrics"]),
+                    "details": valuation_analysis["details"],
                 },
             },
         }
-    
-
-        # Generate a Ricardo Garcia-style investment signal
+        # Generate a Ricardo Garcia-style LLM investment signal
         ricardo_garcia_signal = generate_ricardo_garcia_output(
             ticker=ticker,
             analysis_data=ricardo_garcia_analysis[ticker],
-            model_name=state["metadata"]["model_name"],
-            model_provider=state["metadata"]["model_provider"],
+            model_name=model_name,
+            model_provider=model_provider,
         )
+
+        ml_data = prepare_ml_data(ricardo_garcia_analysis,ricardo_garcia_signal.signal)
 
         ricardo_garcia_analysis[ticker] = {
             "signal": ricardo_garcia_signal.signal,
             "confidence": ricardo_garcia_signal.confidence,
-            "reasoning": ricardo_garcia_signal.reasoning
+            "reasoning": ricardo_garcia_signal.reasoning,
+            "ml_data": ml_data
         }
         progress.update_status("ricardo_garcia_agent", ticker, "Done")
+    return ricardo_garcia_analysis
 
+def ricardo_garcia_agent(state: AgentState):
+   
+    data = state["data"]
+    start_date = data["start_date"]
+    end_date = data["end_date"]
+    tickers = data["tickers"]
+
+    ricardo_garcia_analysis = generate_ricardo_garcia_signals(tickers, start_date, end_date, state["metadata"]["model_name"], state["metadata"]["model_provider"]) 
+    
     # Create the technical analyst message
     message = HumanMessage(
         content=json.dumps(ricardo_garcia_analysis),
@@ -525,14 +551,16 @@ def calculate_hurst_exponent(price_series: pd.Series, max_lag: int = 20) -> floa
     
 def analyze_valuation(financial_line_items: list, market_cap: float) -> dict:
     """
-    Cathie Wood often focuses on long-term exponential growth potential. We can do
+    Focus on long-term exponential growth potential. We can do
     a simplified approach looking for a large total addressable market (TAM) and the
     company's ability to capture a sizable portion.
     """
+    max_possible_score = 5
     if not financial_line_items or market_cap is None:
         return {
             "signal":"neutral",
             "score": 0,
+            "max_score": max_possible_score,
             "details": "Insufficient data for valuation",
             "confidence": 0,
             "metrics": {}
@@ -540,16 +568,6 @@ def analyze_valuation(financial_line_items: list, market_cap: float) -> dict:
 
     latest = financial_line_items[-1]
     fcf = latest.free_cash_flow if latest.free_cash_flow else 0
-
-    if fcf <= 0:
-        return {
-            "signal":"bearish",
-            "score": 0,
-            "details": f"No positive FCF for valuation; FCF = {fcf}",
-            "intrinsic_value": None,
-            "confidence": 0,
-            "metrics": {}
-        }
 
     # Instead of a standard DCF, let's assume a higher growth rate for an innovative company.
     # Example values:
@@ -592,10 +610,11 @@ def analyze_valuation(financial_line_items: list, market_cap: float) -> dict:
         "score": score,
         "details": "; ".join(details),
         "confidence": score / max_possible_score,
+        "raw_score": score,
+        "max_score": max_possible_score,
         "metrics": {
-            "intrinsic_value": intrinsic_value,
-            "margin_of_safety": margin_of_safety,
             "market_cap": market_cap,
+            "margin_of_safety": margin_of_safety,
         }
     } 
 
@@ -611,15 +630,19 @@ def analyze_disruptive_potential(metrics: list, financial_line_items: list) -> d
     """
     score = 0
     details = []
-
+    max_possible_score = 12  # Sum of all possible points
     if not metrics or not financial_line_items:
         return {
             "score": 0,
-            "details": "Insufficient data to analyze disruptive potential"
+            "max_score": max_possible_score,
+            "details": "Insufficient data to analyze disruptive potential",
+            "confidence": 0,
+            "metrics": {}
         }
 
     # 1. Revenue Growth Analysis - Check for accelerating growth
     revenues = [item.revenue for item in financial_line_items if item.revenue]
+    growth_rate = 0
     if len(revenues) >= 3:  # Need at least 3 periods to check acceleration
         growth_rates = []
         for i in range(len(revenues)-1):
@@ -700,7 +723,7 @@ def analyze_disruptive_potential(metrics: list, financial_line_items: list) -> d
     else:
         details.append("No R&D data available")
 
-    max_possible_score = 12  # Sum of all possible points
+    
 
     signal = "bullish" if score >= 0.65 * max_possible_score else "bearish" if score <= 0.4 * max_possible_score else "neutral"
     return {
@@ -711,15 +734,10 @@ def analyze_disruptive_potential(metrics: list, financial_line_items: list) -> d
         "raw_score": score,
         "max_score": max_possible_score,
         "metrics": {
-            "revenue_growth": latest_growth,
-            "gross_margin": gross_margins[-1],
-            "operating_expense_growth": opex_growth,
-            "rd_investment": rd_intensity,
             "revenue": revenues[-1],
-            "operating_expense": operating_expenses[-1],
-            "research_and_development": rd_expenses[-1],
             "rd_intensity": rd_intensity,
-            "margin_trend": margin_trend
+            "margin_trend": margin_trend,
+            "growth_rate": growth_rate,
         }
     }
 
@@ -745,6 +763,7 @@ def generate_ricardo_garcia_output(
             " 6. He invests in growth stocks that have a market cap of less than 1 trillion dollars.\n"
             " 7. He takes into account the macroeconomic factors for the sector that the company is in. If the sector is doing well, he will invest in the company. If it is not, he will not invest in the company.\n"
             " 8. He looks at the RSI to determine if the stock is overbought or oversold. If it is overbought, he will not invest in the company. If it is oversold, he will invest in the company.\n"
+            " 9. He considers analyst consensus price targets to determine if the stock is undervalued or overvalued. If the price target is higher than the current price, he will invest in the company. If the price target is lower than the current price, he will not invest in the company.\n"
             "Rules:\n"
             "- Identify disruptive or breakthrough technology.\n"
             "- Evaluate strong potential for multi-year revenue growth.\n"
