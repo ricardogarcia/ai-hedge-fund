@@ -84,6 +84,10 @@ class Backtester:
             }
         }
 
+        self.capital = initial_capital
+        self.positions = 0
+        self.portfolio_history = []
+
     def execute_trade(self, ticker: str, action: str, quantity: float, current_price: float):
         """
         Execute trades with support for both long and short positions.
@@ -612,6 +616,21 @@ class Backtester:
         print(f"Max Consecutive Losses: {Fore.RED}{max_consecutive_losses}{Style.RESET_ALL}")
 
         return performance_df
+
+    def run_strategy(self, trading_history: pd.DataFrame):
+        # This is a placeholder. A real implementation would loop through
+        # the trading history and simulate trades.
+        self.portfolio_history = trading_history.copy()
+        self.portfolio_history['portfolio_value'] = self.initial_capital # Dummy value
+
+    def calculate_performance(self):
+        # This is a placeholder. A real implementation would calculate
+        # actual performance metrics.
+        return {
+            "total_return": 0.05,
+            "sharpe_ratio": 1.5,
+            "max_drawdown": -0.10
+        }
 
 
 ### 4. Run the Backtest #####

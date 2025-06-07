@@ -178,7 +178,7 @@ def generate_ricardo_garcia_signals(tickers: list[str], start_date: str, end_dat
             model_provider=model_provider,
         )
 
-        ml_data = prepare_ml_data(ricardo_garcia_analysis,ricardo_garcia_signal.signal)
+        ml_data = prepare_ml_data(ricardo_garcia_analysis, ricardo_garcia_signal.signal)
 
         ricardo_garcia_analysis[ticker] = {
             "signal": ricardo_garcia_signal.signal,
