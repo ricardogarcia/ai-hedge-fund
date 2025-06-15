@@ -1,7 +1,8 @@
 import math
 
 from langchain_core.messages import HumanMessage
-from datetime import datetime
+from datetime import datetime, timedelta
+import time
 from graph.state import AgentState, show_agent_reasoning
 
 import json
@@ -20,8 +21,11 @@ import json
 from typing_extensions import Literal
 from utils.progress import progress
 from utils.llm import call_llm
+from xgboost import XGBRegressor
+import joblib
 
-
+with open("/Users/rickystyle/Dev/Finance/ai-hedge-fund/src/ml/ml_model.pkl", "rb") as f:
+    model = joblib.load(f)
 
 class RicardoGarciaSignal(BaseModel):
     signal: Literal["bullish", "bearish", "neutral"]
@@ -29,164 +33,209 @@ class RicardoGarciaSignal(BaseModel):
     reasoning: str
 
 
-def prepare_ml_data(analysis: dict,llm_signal: str) -> dict:
+def prepare_ml_data_for_model(ml_data: dict) -> dict:
+    """
+    Prepare the data for the XGBoost model by converting the ml_data to a pandas dataframe
+    """
+    df = pd.DataFrame([ml_data])
+    df.drop(columns=['price_change_6m','disruptive_analysis_revenue'], inplace=True, errors='ignore')
+    return df
+
+
+
+def predict_price_change(ml_data: dict) -> float:
+    """
+    Use the XGBoost model to predict the price change
+    """
+    
+    # Prepare the data for the model
+    #prepared_data = prepare_ml_data_for_model(ml_data)
+
+    # Predict the price change
+    #predicted_price_change = model.predict(prepared_data)
+    # The model returns a numpy array, so we extract the first element as a float
+    return 0.0, #float(predicted_price_change[0])
+
+
+def prepare_ml_data(analysis: dict,price_change_6m: float) -> dict:
     """
     Prepare data for machine learning model training.
     """
     ml_data = {}
     for ticker, analysis_data in analysis.items():
-        print(analysis_data)
         strategy_signals = analysis_data["strategy_signals"]
         for signal_name, signal_data in strategy_signals.items():
             metrics = signal_data["metrics"]
             for metric_name, metric_value in metrics.items():
                 ml_data[f"{signal_name}_{metric_name}"] = metric_value
-        ml_data[f"llm_signal"] = llm_signal
+        ml_data[f"price_change_6m"] = price_change_6m
     return ml_data
 
-
-def generate_ricardo_garcia_signals(tickers: list[str], start_date: str, end_date: str,model_name: str, model_provider: str) -> dict:
-    
-    # Initialize analysis for each ticker
-    ricardo_garcia_analysis = {}
-    for ticker in tickers:
+def generate_ricardo_garcia_signals_with_ml(tickers: list[str], start_date: str, end_date: str) -> dict:
+     
+     # Initialize analysis for each ticker
+     ricardo_garcia_analysis = {}
+     ml_data = {}
+     for ticker in tickers:
+        print(f"Analyzing {ticker}...")
+        # pause for 1 second
+        time.sleep(1.0)
+        
         progress.update_status("ricardo_garcia_agent", ticker, "Analyzing price data")
+        try:
+            # Get the historical price data
+            start_date = (datetime.strptime(start_date, "%Y-%m-%d") - timedelta(days=183)).strftime("%Y-%m-%d")
+            prices = get_prices(
+                ticker=ticker,
+                start_date=start_date,
+                end_date=end_date,
+            )
 
-        # Get the historical price data
-        prices = get_prices(
-            ticker=ticker,
-            start_date=start_date,
-            end_date=end_date,
-        )
+            if not prices:
+                progress.update_status("ricardo_garcia_agent", ticker, "Failed: No price data found")
+                continue
 
-        if not prices:
-            progress.update_status("ricardo_garcia_agent", ticker, "Failed: No price data found")
-            continue
+            # Convert prices to a DataFrame
+            prices_df = prices_to_df(prices)
 
-        # Convert prices to a DataFrame
-        prices_df = prices_to_df(prices)
+            # Calculate 6-month price change (approximately 126 trading days)
+            days_6m = min(126, len(prices_df) - 1)  # Ensure we don't exceed available data
+            price_6m_ago = prices_df['close'].iloc[-(days_6m + 1)]
+            current_price = prices_df['close'].iloc[-1]
+            price_change_6m = (current_price - price_6m_ago) / price_6m_ago
 
-        # Calculate the Hurst Exponent
+            # Calculate the Hurst Exponent
 
-        progress.update_status("ricardo_garcia_agent", ticker, "Getting market cap")
-        market_cap = get_market_cap(ticker, end_date)
+            progress.update_status("ricardo_garcia_agent", ticker, "Getting market cap")
+            market_cap = get_market_cap(ticker, end_date)
 
-        progress.update_status("ricardo_garcia_agent", ticker, "Gathering financial line items")
-        # Request multiple periods of data (annual or TTM) for a more robust view.
-       
-        financial_line_items = search_line_items(
-            ticker,
-            [
-                "revenue",
-                "gross_margin",
-                "operating_margin",
-                "debt_to_equity",
-                "free_cash_flow",
-                "total_assets",
-                "total_liabilities",
-                "dividends_and_other_cash_distributions",
-                "outstanding_shares",
-                "research_and_development",
-                "capital_expenditure",
-                "operating_expense",
-            ],
-            end_date,
-            period="annual",
-            limit=5
-        )
+            progress.update_status("ricardo_garcia_agent", ticker, "Gathering financial line items")
+            # Request multiple periods of data (annual or TTM) for a more robust view.
+        
+            financial_line_items = search_line_items(
+                ticker,
+                [
+                    "revenue",
+                    "gross_margin",
+                    "operating_margin",
+                    "debt_to_equity",
+                    "free_cash_flow",
+                    "total_assets",
+                    "total_liabilities",
+                    "dividends_and_other_cash_distributions",
+                    "outstanding_shares",
+                    "research_and_development",
+                    "capital_expenditure",
+                    "operating_expense",
+                ],
+                end_date,
+                period="annual",
+                limit=5
+            )
 
-        progress.update_status("ricardo_garcia_agent", ticker, "Fetching financial metrics")
-        # You can adjust these parameters (period="annual"/"ttm", limit=5/10, etc.)
-        metrics = get_financial_metrics(ticker, end_date, period="annual", limit=5)
+            progress.update_status("ricardo_garcia_agent", ticker, "Fetching financial metrics")
+            # You can adjust these parameters (period="annual"/"ttm", limit=5/10, etc.)
+            metrics = get_financial_metrics(ticker, end_date, period="annual", limit=5)
 
-        # Transform to dictionary
-        metrics_dict = {
-            item.report_period: {
-                k: v for k, v in item.model_dump().items() 
-                if k not in ['ticker', 'report_period', 'period', 'currency']
+            # Transform to dictionary
+            metrics_dict = {
+                item.report_period: {
+                    k: v for k, v in item.model_dump().items() 
+                    if k not in ['ticker', 'report_period', 'period', 'currency']
+                }
+                for item in metrics
             }
-            for item in metrics
-        }
 
-        progress.update_status("ricardo_garcia_agent", ticker, "Calculating trend signals")
-        trend_signals = calculate_trend_signals(prices_df)
+            progress.update_status("ricardo_garcia_agent", ticker, "Calculating trend signals")
+            trend_signals = calculate_trend_signals(prices_df)
 
-        progress.update_status("ricardo_garcia_agent", ticker, "Calculating mean reversion")
-        mean_reversion_signals = calculate_mean_reversion_signals(prices_df)
+            progress.update_status("ricardo_garcia_agent", ticker, "Calculating mean reversion")
+            mean_reversion_signals = calculate_mean_reversion_signals(prices_df)
 
-        progress.update_status("ricardo_garcia_agent", ticker, "Analyzing disruptive potential")
-        disruptive_analysis = analyze_disruptive_potential(metrics, financial_line_items)
+            progress.update_status("ricardo_garcia_agent", ticker, "Analyzing disruptive potential")
+            disruptive_analysis = analyze_disruptive_potential(metrics, financial_line_items)
 
-        progress.update_status("ricardo_garcia_agent", ticker, "Analyzing valuation")
-        valuation_analysis = analyze_valuation(financial_line_items, market_cap)
+            progress.update_status("ricardo_garcia_agent", ticker, "Analyzing valuation")
+            valuation_analysis = analyze_valuation(financial_line_items, market_cap)
 
-        # Combine all signals using a weighted ensemble approach
-        strategy_weights = {
-            "trend": 0.10,
-            "mean_reversion": 0.20,
-            "disruptive_analysis": 0.30,
-            "valuation_analysis": 0.30,
-        }
+            # Combine all signals using a weighted ensemble approach
+            strategy_weights = {
+                "trend": 0.10,
+                "mean_reversion": 0.20,
+                "disruptive_analysis": 0.30,
+                "valuation_analysis": 0.30,
+            }
 
-        progress.update_status("ricardo_garcia_agent", ticker, "Combining signals")
-        combined_signal = weighted_signal_combination(
-            {
-                "trend": trend_signals,
-                "mean_reversion": mean_reversion_signals,
-                "disruptive_analysis": disruptive_analysis,
-                "valuation_analysis": valuation_analysis,
-            },
-            strategy_weights,
-        )
-
-        # Generate detailed analysis report for this ticker
-        ricardo_garcia_analysis[ticker] = {
-            "signal": combined_signal["signal"],
-            "confidence": round(combined_signal["confidence"] * 100),
-            "strategy_signals": {
-                "trend_following": {
-                    "signal": trend_signals["signal"],
-                    "confidence": round(trend_signals["confidence"] * 100),
-                    "metrics": normalize_pandas(trend_signals["metrics"]),
+            progress.update_status("ricardo_garcia_agent", ticker, "Combining signals")
+            combined_signal = weighted_signal_combination(
+                {
+                    "trend": trend_signals,
+                    "mean_reversion": mean_reversion_signals,
+                    "disruptive_analysis": disruptive_analysis,
+                    "valuation_analysis": valuation_analysis,
                 },
-                "mean_reversion": {
-                    "signal": mean_reversion_signals["signal"],
-                    "confidence": round(mean_reversion_signals["confidence"] * 100),
-                    "metrics": normalize_pandas(mean_reversion_signals["metrics"]),
-                },
-                "disruptive_analysis": {
-                    "signal": disruptive_analysis["signal"],
-                    "score": disruptive_analysis["score"],
-                    "metrics": normalize_pandas(disruptive_analysis["metrics"]),
-                    "details": disruptive_analysis["details"],
-                    "max_score": disruptive_analysis["max_score"],
-                },
-                "valuation_analysis": {
-                    "signal": valuation_analysis["signal"],
-                    "score": valuation_analysis["score"],
-                    "max_score": valuation_analysis["max_score"],
-                    "metrics": normalize_pandas(valuation_analysis["metrics"]),
-                    "details": valuation_analysis["details"],
-                },
-            },
-        }
-        # Generate a Ricardo Garcia-style LLM investment signal
-        ricardo_garcia_signal = generate_ricardo_garcia_output(
-            ticker=ticker,
-            analysis_data=ricardo_garcia_analysis[ticker],
-            model_name=model_name,
-            model_provider=model_provider,
-        )
+                strategy_weights,
+            )
 
-        ml_data = prepare_ml_data(ricardo_garcia_analysis, ricardo_garcia_signal.signal)
 
-        ricardo_garcia_analysis[ticker] = {
-            "signal": ricardo_garcia_signal.signal,
-            "confidence": ricardo_garcia_signal.confidence,
-            "reasoning": ricardo_garcia_signal.reasoning,
-            "ml_data": ml_data
-        }
-        progress.update_status("ricardo_garcia_agent", ticker, "Done")
+            # Generate detailed analysis report for this ticker
+            ricardo_garcia_analysis[ticker] = {
+                "signal": combined_signal["signal"],
+                "confidence": round(combined_signal["confidence"] * 100),
+                "strategy_signals": {
+                    "disruptive_analysis": {
+                        "signal": disruptive_analysis["signal"],
+                        "score": disruptive_analysis["score"],
+                        "metrics": normalize_pandas(disruptive_analysis["metrics"]),
+                        "details": disruptive_analysis["details"],
+                        "max_score": disruptive_analysis["max_score"],
+                    },
+                    "valuation_analysis": {
+                        "signal": valuation_analysis["signal"],
+                        "score": valuation_analysis["score"],
+                        "max_score": valuation_analysis["max_score"],
+                        "metrics": normalize_pandas(valuation_analysis["metrics"]),
+                        "details": valuation_analysis["details"],
+                    },
+                },
+            }
+
+            ml_data[ticker] = prepare_ml_data({ticker: ricardo_garcia_analysis[ticker]}, price_change_6m)
+
+        except Exception as e:
+            print(f"Error generating signal for {ticker}: {e}")
+            continue
+     return ricardo_garcia_analysis, ml_data
+     
+def generate_ricardo_garcia_signals(tickers: list[str], start_date: str, end_date: str,model_name: str, model_provider: str) -> dict:
+
+    ricardo_garcia_analysis, ml_data = generate_ricardo_garcia_signals_with_ml(tickers, start_date, end_date, model_name, model_provider)
+    
+    for ticker in tickers:
+        try:
+            # Predict the price change using the XGBoost model
+            predicted_price_change_6m = predict_price_change(ml_data)
+
+            # Generate a Ricardo Garcia-style LLM investment signal
+            print(f"Generating signal for {ticker}")
+            ricardo_garcia_signal = generate_ricardo_garcia_output(
+                ticker=ticker,
+                analysis_data=ricardo_garcia_analysis[ticker],
+                model_name=model_name,
+                model_provider=model_provider,
+                predicted_price_change_6m=predicted_price_change_6m
+            )
+
+            ricardo_garcia_analysis[ticker] = {
+                "signal": ricardo_garcia_signal.signal,
+                "confidence": ricardo_garcia_signal.confidence,
+                "reasoning": ricardo_garcia_signal.reasoning,
+                "predicted_price_change_6m": predicted_price_change_6m
+            }
+            progress.update_status("ricardo_garcia_agent", ticker, "Done")
+        except Exception as e:
+            print(f"Error generating signal for {ticker}: {e}")
+            continue
     return ricardo_garcia_analysis
 
 def ricardo_garcia_agent(state: AgentState):
@@ -228,17 +277,25 @@ def calculate_trend_signals(prices_df):
     # Calculate ADX for trend strength
     adx = calculate_adx(prices_df, 14)
 
-    # Determine trend direction and strength
+    # Determine trend direction and strength with NaN handling
     short_trend = ema_8 > ema_21
     medium_trend = ema_21 > ema_55
 
     # Combine signals with confidence weighting
-    trend_strength = adx["adx"].iloc[-1] / 100.0
+    adx_value = adx["adx"].iloc[-1]
+    trend_strength = adx_value / 100.0 if not pd.isna(adx_value) else 0.5
 
-    if short_trend.iloc[-1] and medium_trend.iloc[-1]:
+    try:
+        short_trend_current = short_trend.iloc[-1] if not pd.isna(short_trend.iloc[-1]) else False
+        medium_trend_current = medium_trend.iloc[-1] if not pd.isna(medium_trend.iloc[-1]) else False
+    except (IndexError, KeyError):
+        short_trend_current = False
+        medium_trend_current = False
+
+    if short_trend_current and medium_trend_current:
         signal = "bullish"
         confidence = trend_strength
-    elif not short_trend.iloc[-1] and not medium_trend.iloc[-1]:
+    elif not short_trend_current and not medium_trend_current:
         signal = "bearish"
         confidence = trend_strength
     else:
@@ -249,7 +306,7 @@ def calculate_trend_signals(prices_df):
         "signal": signal,
         "confidence": confidence,
         "metrics": {
-            "adx": float(adx["adx"].iloc[-1]),
+            "adx": float(adx_value) if not pd.isna(adx_value) else 0.0,
             "trend_strength": float(trend_strength),
         },
     }
@@ -271,16 +328,26 @@ def calculate_mean_reversion_signals(prices_df):
     rsi_14 = calculate_rsi(prices_df, 14)
     rsi_28 = calculate_rsi(prices_df, 28)
 
-    # Mean reversion signals
-    price_vs_bb = (prices_df["close"].iloc[-1] - bb_lower.iloc[-1]) / (bb_upper.iloc[-1] - bb_lower.iloc[-1])
+    # Mean reversion signals with NaN handling
+    try:
+        price_vs_bb = (prices_df["close"].iloc[-1] - bb_lower.iloc[-1]) / (bb_upper.iloc[-1] - bb_lower.iloc[-1])
+        if pd.isna(price_vs_bb):
+            price_vs_bb = 0.5  # Default to middle of band
+    except (IndexError, ZeroDivisionError):
+        price_vs_bb = 0.5
+
+    # Get the latest z_score with NaN handling
+    latest_z_score = z_score.iloc[-1] if not pd.isna(z_score.iloc[-1]) else 0
+    latest_rsi_14 = rsi_14.iloc[-1] if not pd.isna(rsi_14.iloc[-1]) else 50
+    latest_rsi_28 = rsi_28.iloc[-1] if not pd.isna(rsi_28.iloc[-1]) else 50
 
     # Combine signals
-    if z_score.iloc[-1] < -2 and price_vs_bb < 0.2:
+    if latest_z_score < -2 and price_vs_bb < 0.2:
         signal = "bullish"
-        confidence = min(abs(z_score.iloc[-1]) / 4, 1.0)
-    elif z_score.iloc[-1] > 2 and price_vs_bb > 0.8:
+        confidence = min(abs(latest_z_score) / 4, 1.0) if not pd.isna(latest_z_score) else 0.5
+    elif latest_z_score > 2 and price_vs_bb > 0.8:
         signal = "bearish"
-        confidence = min(abs(z_score.iloc[-1]) / 4, 1.0)
+        confidence = min(abs(latest_z_score) / 4, 1.0) if not pd.isna(latest_z_score) else 0.5
     else:
         signal = "neutral"
         confidence = 0.5
@@ -289,10 +356,10 @@ def calculate_mean_reversion_signals(prices_df):
         "signal": signal,
         "confidence": confidence,
         "metrics": {
-            "z_score": float(z_score.iloc[-1]),
+            "z_score": float(latest_z_score),
             "price_vs_bb": float(price_vs_bb),
-            "rsi_14": float(rsi_14.iloc[-1]),
-            "rsi_28": float(rsi_28.iloc[-1]),
+            "rsi_14": float(latest_rsi_14),
+            "rsi_28": float(latest_rsi_28),
         },
     }
 
@@ -314,11 +381,16 @@ def calculate_momentum_signals(prices_df):
     # Relative strength
     # (would compare to market/sector in real implementation)
 
-    # Calculate momentum score
-    momentum_score = (0.4 * mom_1m + 0.3 * mom_3m + 0.3 * mom_6m).iloc[-1]
+    # Calculate momentum score with NaN handling
+    latest_mom_1m = mom_1m.iloc[-1] if not pd.isna(mom_1m.iloc[-1]) else 0
+    latest_mom_3m = mom_3m.iloc[-1] if not pd.isna(mom_3m.iloc[-1]) else 0
+    latest_mom_6m = mom_6m.iloc[-1] if not pd.isna(mom_6m.iloc[-1]) else 0
+    
+    momentum_score = (0.4 * latest_mom_1m + 0.3 * latest_mom_3m + 0.3 * latest_mom_6m)
 
-    # Volume confirmation
-    volume_confirmation = volume_momentum.iloc[-1] > 1.0
+    # Volume confirmation with NaN handling
+    latest_volume_momentum = volume_momentum.iloc[-1] if not pd.isna(volume_momentum.iloc[-1]) else 1.0
+    volume_confirmation = latest_volume_momentum > 1.0
 
     if momentum_score > 0.05 and volume_confirmation:
         signal = "bullish"
@@ -334,10 +406,10 @@ def calculate_momentum_signals(prices_df):
         "signal": signal,
         "confidence": confidence,
         "metrics": {
-            "momentum_1m": float(mom_1m.iloc[-1]),
-            "momentum_3m": float(mom_3m.iloc[-1]),
-            "momentum_6m": float(mom_6m.iloc[-1]),
-            "volume_momentum": float(volume_momentum.iloc[-1]),
+            "momentum_1m": float(latest_mom_1m),
+            "momentum_3m": float(latest_mom_3m),
+            "momentum_6m": float(latest_mom_6m),
+            "volume_momentum": float(latest_volume_momentum),
         },
     }
 
@@ -363,9 +435,11 @@ def calculate_volatility_signals(prices_df):
     atr = calculate_atr(prices_df)
     atr_ratio = atr / prices_df["close"]
 
-    # Generate signal based on volatility regime
-    current_vol_regime = vol_regime.iloc[-1]
-    vol_z = vol_z_score.iloc[-1]
+    # Generate signal based on volatility regime with NaN handling
+    current_vol_regime = vol_regime.iloc[-1] if not pd.isna(vol_regime.iloc[-1]) else 1.0
+    vol_z = vol_z_score.iloc[-1] if not pd.isna(vol_z_score.iloc[-1]) else 0.0
+    latest_hist_vol = hist_vol.iloc[-1] if not pd.isna(hist_vol.iloc[-1]) else 0.2
+    latest_atr_ratio = atr_ratio.iloc[-1] if not pd.isna(atr_ratio.iloc[-1]) else 0.01
 
     if current_vol_regime < 0.8 and vol_z < -1:
         signal = "bullish"  # Low vol regime, potential for expansion
@@ -379,12 +453,12 @@ def calculate_volatility_signals(prices_df):
 
     return {
         "signal": signal,
-        "confidence": confidence,
+        "confidence": confidence,  
         "metrics": {
-            "historical_volatility": float(hist_vol.iloc[-1]),
+            "historical_volatility": float(latest_hist_vol),
             "volatility_regime": float(current_vol_regime),
             "volatility_z_score": float(vol_z),
-            "atr_ratio": float(atr_ratio.iloc[-1]),
+            "atr_ratio": float(latest_atr_ratio),
         },
     }
 
@@ -399,9 +473,13 @@ def weighted_signal_combination(signals, weights):
     total_confidence = 0
 
     for strategy, signal in signals.items():
-        numeric_signal = signal_values[signal["signal"]]
-        weight = weights[strategy]
+        numeric_signal = signal_values.get(signal["signal"], 0)
+        weight = weights.get(strategy, 0)
         confidence = signal["confidence"]
+        
+        # Handle NaN confidence values
+        if pd.isna(confidence):
+            confidence = 0.5
 
         weighted_sum += numeric_signal * weight * confidence
         total_confidence += weight * confidence
@@ -410,6 +488,10 @@ def weighted_signal_combination(signals, weights):
     if total_confidence > 0:
         final_score = weighted_sum / total_confidence
     else:
+        final_score = 0
+
+    # Handle potential NaN in final_score
+    if pd.isna(final_score):
         final_score = 0
 
     # Convert back to signal
@@ -746,6 +828,7 @@ def generate_ricardo_garcia_output(
     analysis_data: dict[str, any],
     model_name: str,
     model_provider: str,
+    predicted_price_change_6m: float
 ) -> RicardoGarciaSignal:
 
     """
@@ -755,6 +838,7 @@ def generate_ricardo_garcia_output(
         (
             "system",
             """You are a Ricardo Garcia AI agent, making investment decisions using his principles:\n\n"
+            " 0. He considers the predicted price change in the next 6 months to determine if the stock is undervalued or overvalued. If the predicted price change is higher than the current price, he will invest in the company. If the predicted price change is lower than the current price, he will not invest in the company.\n"
             " 1. He invests mostly when a particular stock has strong revenue and earnings growth.\n"
             " 2. He invests in growth companies that are using AI technology to grow their business. especially in the military, robotics, and biotechnology sectors. \n"
             " 3. Almost always invest in companies where the majority shareowners have funded the policitians that are currently in power.  This would mean that those companies stand to beneft from the policies of the current administration.  \n"
@@ -762,8 +846,7 @@ def generate_ricardo_garcia_output(
             " 5. Focus on technology, healthcare, or other future-facing sectors.\n"
             " 6. He invests in growth stocks that have a market cap of less than 1 trillion dollars.\n"
             " 7. He takes into account the macroeconomic factors for the sector that the company is in. If the sector is doing well, he will invest in the company. If it is not, he will not invest in the company.\n"
-            " 8. He looks at the RSI to determine if the stock is overbought or oversold. If it is overbought, he will not invest in the company. If it is oversold, he will invest in the company.\n"
-            " 9. He considers analyst consensus price targets to determine if the stock is undervalued or overvalued. If the price target is higher than the current price, he will invest in the company. If the price target is lower than the current price, he will not invest in the company.\n"
+            " 8. He considers analyst consensus price targets to determine if the stock is undervalued or overvalued. If the price target is higher than the current price, he will invest in the company. If the price target is lower than the current price, he will not invest in the company.\n"
             "Rules:\n"
             "- Identify disruptive or breakthrough technology.\n"
             "- Evaluate strong potential for multi-year revenue growth.\n"
@@ -776,8 +859,11 @@ def generate_ricardo_garcia_output(
             """Based on the following analysis, create a Ricardo Garcia-style investment signal.\n\n"
             "Analysis Data for {ticker}:\n"
             "{analysis_data}\n\n"
-            "Return the trading signal in this JSON format:\n"
-            "{{\n  \"signal\": \"bullish/bearish/neutral\",\n  \"confidence\": float (0-100),\n  \"reasoning\": \"string\"\n}}"""
+            "Predicted price change in the next 6 months: {predicted_price_change_6m}\n"
+            "\n"
+            "Return your result **only** in this strict JSON format:\n"
+            "{{\n  \"signal\": \"bullish/bearish/neutral\",\n  \"confidence\": float (0-100),\n  \"reasoning\": \"string\"\n}},\n"
+            "{{\n  \"predicted_price_change_6m\": float (0-100)\n}}"""
         )
     ])
 
@@ -785,6 +871,7 @@ def generate_ricardo_garcia_output(
     prompt = template.invoke({
         "analysis_data": json.dumps(analysis_data, indent=2),
         "ticker": ticker,
+        "predicted_price_change_6m": predicted_price_change_6m
     })
 
     def create_default_ricardo_garcia_signal():

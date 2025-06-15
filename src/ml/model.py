@@ -7,6 +7,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split, cross_val_predict
 from sklearn.metrics import classification_report
 
+
 # 🧪 Simulate dataset
 np.random.seed(42)
 n_samples = 200
